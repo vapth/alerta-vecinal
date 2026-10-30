@@ -1507,7 +1507,7 @@ function renderSel(){
     var zf=zoneOf(a.lat,a.lon);
     var g=fireGeom(a,Date.now()),m=toXY(S.me.lat,S.me.lon),d=Math.max(0,Math.hypot(g.ox-m.x,g.oy-m.y)-g.r)/1000;
     var br=((Math.atan2(a.dy,a.dx)*180/Math.PI+90)%360+360)%360;
-    h=x+'<h4>Foco · '+esc(placeOf(a))+'</h4><p>Reportado por '+esc(a.name||'Vecino')+' '+ago(a.t)+(a.status==='controlled'?' · controlado':'')+'</p>'+(zf?'<p style="color:var(--warn)">Foco dentro de la zona «'+esc(zf.n)+'»: la vegetación seca favorece que el fuego avance más rápido.</p>':'')+'<p class="mono">Radio ~'+fmtKm(g.r/1000)+' · borde a '+fmtKm(d)+' de ti · se propaga al '+dirName(br)+'</p>'+(a.status!=='controlled'?'<div><button class="btn sm" data-act="closealert:'+esc(a.id)+'">Marcar como controlado</button></div>':'');
+    h=x+'<h4>Foco · '+esc(placeOf(a))+'</h4><p>Reportado por '+esc(a.name||'Vecino')+' '+ago(a.t)+(a.status==='controlled'?' · controlado':'')+'</p>'+(zf?'<p style="color:var(--warn)">Foco dentro de la zona «'+esc(zf.n)+'»: la vegetación seca favorece que el fuego avance más rápido.</p>':'')+'<p class="mono">Radio ~'+fmtKm(g.r/1000)+' · borde a '+fmtKm(d)+' de ti · se propaga al '+dirName(br)+'</p>'+(a.status!=='controlled'?(nearFire(a)?'<div><button class="btn sm" data-act="closealert:'+esc(a.id)+'">Marcar como controlado</button></div>':'<p class="tiny">Solo vecinos a menos de '+CLOSE_KM+' km del incendio pueden marcarlo como controlado.</p>'):'');
   }
   el.innerHTML=h;el.hidden=false;
 }
@@ -1527,7 +1527,7 @@ function updateConn(){
   else t.textContent='Sin red';
   c.setAttribute('aria-label',t.textContent);
   c.title=NET.ok?'Conectado a '+NET.url:'Sin servidor: tus mensajes y alertas quedan solo en este dispositivo';
-  $('#roomLbl').textContent=NET.ok?'Sala '+S.room:'Solo en este dispositivo';
+  $('#roomLbl').textContent=NET.ok?'Sala '+S.room+' · v3':'Solo en este dispositivo';
 }
 function publish(sub,obj,retain){
   var sent=false,body=obj==null?'':JSON.stringify(obj);
@@ -1540,16 +1540,20 @@ function publish(sub,obj,retain){
 function onNetMessage(topic,payload){
   var sub=topic.slice(prefix().length),txt='';
   try{txt=payload.toString()}catch(e){return}
-  if(sub.indexOf('chat/')===0){
+  if(sub==='chat'||sub.indexOf('chat/')===0){
     var m;try{m=JSON.parse(txt)}catch(e){return}
     var d=cleanMsg(m);if(!d||S.msgs[d.id]||Date.now()-d.t>864e5)return;
-    S.msgs[d.id]=d;trimMsgs();renderChat();
+    S.msgs[d.id]=d;if(d.alertId)delete S.msgs['a_'+d.alertId];trimMsgs();renderChat();
   }else if(sub.indexOf('alerts/')===0){
     var id=sub.slice(7);
     if(!txt){delete S.alerts[id];refresh(true);return}
     var a;try{a=JSON.parse(txt)}catch(e){return}
     var d2=cleanAlert(a,id);if(!d2)return;
     var isNew=!S.seen[d2.id];S.seen[d2.id]=1;S.alerts[d2.id]=d2;
+    if(d2.status!=='controlled'&&Date.now()-d2.t<864e5&&!Object.keys(S.msgs).some(function(k){return S.msgs[k].alertId===d2.id})){
+      S.msgs['a_'+d2.id]={id:'a_'+d2.id,t:d2.t,uid:d2.uid,name:d2.name,sector:d2.sector,kind:'sos',alertId:d2.id,text:'Foco de incendio '+placeOf(d2)+'. Revisen el mapa y sigan las rutas de evacuación.'};
+      renderChat();
+    }
     refresh(true);scheduleRoutes();
     if(isNew&&Date.now()>S.netSince&&d2.uid!==S.uid&&d2.status!=='controlled'&&Date.now()-d2.t<90000)showBanner(d2);
   }
@@ -1574,7 +1578,7 @@ function trimMsgs(){
 }
 var BROKERS=['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt'];
 function anyOk(){return NET.cs.some(function(x){return x.ok})}
-function topics(){return [prefix()+'chat/+',prefix()+'alerts/+']}
+function topics(){return [prefix()+'chat/+',prefix()+'chat',prefix()+'alerts/+']}
 function subTo(x){
   var o={};topics().forEach(function(tp){o[tp]={qos:1}});
   try{x.c.subscribe(o)}catch(e){}
@@ -1669,7 +1673,7 @@ function renderAlerts(){
     h+='<div class="card alert'+(done?' done':'')+'"><div class="h"><b>'+esc(placeOf(a))+'</b><span class="pill '+(done?'ok':'red')+'">'+(done?'Controlado':'Activa')+'</span></div>'
      +'<dl><dt>Reportó</dt><dd>'+esc(a.name||'Vecino')+(a.sector?' · '+esc(a.sector):'')+'</dd><dt>Hora</dt><dd>'+hm(a.t)+' · '+ago(a.t)+'</dd>'
      +(done?'':'<dt>Radio</dt><dd>~'+fmtKm(g.r/1000)+' (simulado)</dd><dt>Distancia</dt><dd>borde a '+fmtKm(d)+' de ti</dd>')
-     +'</dl><div class="act"><button class="btn sm" data-act="viewalert:'+esc(a.id)+'">Ver en el mapa</button>'+(done?'<button class="btn sm ghost" data-act="delalert:'+esc(a.id)+'">Borrar</button>':'<button class="btn sm ghost" data-act="closealert:'+esc(a.id)+'">Marcar controlado</button>')+'</div></div>';
+     +'</dl><div class="act"><button class="btn sm" data-act="viewalert:'+esc(a.id)+'">Ver en el mapa</button>'+(done?'<button class="btn sm ghost" data-act="delalert:'+esc(a.id)+'">Borrar</button>':(nearFire(a)?'<button class="btn sm ghost" data-act="closealert:'+esc(a.id)+'">Marcar controlado</button>':'<span class="tiny">Solo vecinos cercanos (&lt;'+CLOSE_KM+' km) pueden marcarla controlada</span>'))+'</div></div>';
   });
   h+='<div class="card"><h3>Números de emergencia en Chile</h3>'
    +[['Bomberos','132','Incendios y rescate'],['CONAF','130','Emergencias forestales'],['Carabineros','133','Seguridad y orden'],['Ambulancia (SAMU)','131','Urgencias médicas']].map(function(n){return '<div class="num"><div><b>'+n[0]+'</b><small>'+n[2]+'</small></div><button class="n" data-act="copy:'+n[1]+'" aria-label="Copiar '+n[1]+'">'+n[1]+'</button></div>'}).join('')
@@ -1683,8 +1687,15 @@ function showBanner(a){
   el.innerHTML='<svg class="ic fill" style="width:20px;height:20px"><use href="#i-flame"/></svg><div class="grow"><b>Alerta de incendio</b><span>'+esc(a.name||'Un vecino')+' · '+esc(placeOf(a))+'</span></div><button data-act="viewalert:'+esc(a.id)+'">Ver</button><button class="bx" data-act="bannerclose" aria-label="Cerrar aviso">&times;</button>';
   el.hidden=false;clearTimeout(showBanner.t);showBanner.t=setTimeout(function(){el.hidden=true},8000);
 }
+var CLOSE_KM=2;
+function nearFire(a){
+  if(a.uid===S.uid)return true;
+  var g=fireGeom(a,Date.now()),m=toXY(S.me.lat,S.me.lon);
+  return Math.max(0,Math.hypot(g.ox-m.x,g.oy-m.y)-g.r)/1000<=CLOSE_KM;
+}
 function closeAlert(id){
   var a=S.alerts[id];if(!a)return;
+  if(!nearFire(a)){toast('Solo vecinos a menos de '+CLOSE_KM+' km del incendio pueden marcarlo como controlado');return}
   var d=Object.assign({},a,{status:'controlled',closedAt:Date.now()});
   S.alerts[id]=d;publish('alerts/'+id,d,true);
   S.sel=null;refresh(true);scheduleRoutes();toast('Alerta marcada como controlada');
