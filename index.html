@@ -1518,7 +1518,7 @@ function refresh(force){
 }
 
 /* ---------- Red en tiempo real (MQTT sobre WebSocket) ---------- */
-var NET={client:null,ok:false,trying:false,url:'',retry:0};
+var NET={cs:[],ok:false,trying:true,url:'',retry:0};
 function prefix(){return 'alertavecinal26/'+S.room+'/'}
 function updateConn(){
   var c=$('#conn'),t=$('#connTxt');c.className='conn';
@@ -1530,15 +1530,19 @@ function updateConn(){
   $('#roomLbl').textContent=NET.ok?'Sala '+S.room:'Solo en este dispositivo';
 }
 function publish(sub,obj,retain){
-  if(!NET.ok||!NET.client)return false;
-  try{NET.client.publish(prefix()+sub,obj==null?'':JSON.stringify(obj),{qos:retain?1:0,retain:!!retain});return true}catch(e){return false}
+  var sent=false,body=obj==null?'':JSON.stringify(obj);
+  NET.cs.forEach(function(x){
+    if(!x.ok)return;
+    try{x.c.publish(prefix()+sub,body,{qos:1,retain:!!retain});sent=true}catch(e){}
+  });
+  return sent;
 }
 function onNetMessage(topic,payload){
   var sub=topic.slice(prefix().length),txt='';
   try{txt=payload.toString()}catch(e){return}
-  if(sub==='chat'){
+  if(sub.indexOf('chat/')===0){
     var m;try{m=JSON.parse(txt)}catch(e){return}
-    var d=cleanMsg(m);if(!d||S.msgs[d.id])return;
+    var d=cleanMsg(m);if(!d||S.msgs[d.id]||Date.now()-d.t>864e5)return;
     S.msgs[d.id]=d;trimMsgs();renderChat();
   }else if(sub.indexOf('alerts/')===0){
     var id=sub.slice(7);
@@ -1569,39 +1573,57 @@ function trimMsgs(){
   ks.sort(function(a,b){return S.msgs[a].t-S.msgs[b].t}).slice(0,ks.length-300).forEach(function(k){delete S.msgs[k]});
 }
 var BROKERS=['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt'];
+function anyOk(){return NET.cs.some(function(x){return x.ok})}
+function topics(){return [prefix()+'chat/+',prefix()+'alerts/+']}
+function subTo(x){
+  var o={};topics().forEach(function(tp){o[tp]={qos:1}});
+  try{x.c.subscribe(o)}catch(e){}
+}
+/* Nos conectamos a AMBOS servidores a la vez y publicamos en los dos: asi dos telefonos
+   se ven aunque cada uno haya conectado primero a un servidor distinto. Los mensajes
+   duplicados se descartan por id. */
 function connectNet(){
   if(typeof mqtt==='undefined'||!mqtt.connect){NET.trying=false;updateConn();return}
+  if(NET.cs.length){return}
   NET.trying=true;updateConn();
-  var i=0;
-  (function next(){
-    if(i>=BROKERS.length){NET.trying=false;NET.ok=false;updateConn();setTimeout(connectNet,15000);return}
-    var url=BROKERS[i++],done=false,c;
-    try{c=mqtt.connect(url,{clientId:'av_'+S.uid.slice(0,8)+'_'+Math.random().toString(16).slice(2,8),clean:true,connectTimeout:7000,reconnectPeriod:0,keepalive:30})}catch(e){next();return}
-    var to=setTimeout(function(){if(!done){done=true;try{c.end(true)}catch(e){}next()}},9000);
-    c.on('error',function(){});
-    c.on('connect',function(){
-      if(done)return;done=true;clearTimeout(to);
-      NET.client=c;NET.ok=true;NET.trying=false;NET.url=url;S.netSince=Date.now()+2500;
-      subscribeRoom();updateConn();toast('Conectado: chat y alertas en vivo');
+  BROKERS.forEach(function(url){
+    var x={url:url,ok:false,c:null};
+    try{x.c=mqtt.connect(url,{clientId:'av_'+S.uid.slice(0,8)+'_'+Math.random().toString(16).slice(2,8),clean:true,connectTimeout:8000,reconnectPeriod:3000,keepalive:20,resubscribe:false})}catch(e){return}
+    NET.cs.push(x);
+    x.c.on('error',function(){});
+    x.c.on('connect',function(){
+      x.ok=true;NET.trying=false;
+      if(!NET.ok){S.netSince=Date.now()+2500}
+      NET.ok=true;NET.url=url;
+      subTo(x);updateConn();
+      if(!NET.toasted){NET.toasted=1;toast('Conectado')}
     });
-    c.on('message',onNetMessage);
-    c.on('close',function(){
-      if(!done){return}
-      if(NET.client===c&&NET.ok){NET.ok=false;NET.client=null;updateConn();setTimeout(connectNet,4000)}
+    x.c.on('message',onNetMessage);
+    x.c.on('close',function(){x.ok=false;NET.ok=anyOk();if(!NET.ok)NET.trying=true;updateConn()});
+    x.c.on('offline',function(){x.ok=false;NET.ok=anyOk();updateConn()});
+  });
+  setInterval(function(){
+    /* revisa que los servidores sigan vivos; si no, fuerza reconexion */
+    NET.cs.forEach(function(x){if(x.c&&!x.c.connected&&!x.c.reconnecting){try{x.c.reconnect()}catch(e){}}});
+  },8000);
+  /* al volver a la app (el celular suspende la conexion en segundo plano) */
+  document.addEventListener('visibilitychange',function(){
+    if(document.hidden)return;
+    NET.cs.forEach(function(x){
+      if(x.c&&!x.c.connected){try{x.c.reconnect()}catch(e){}}
+      else if(x.c){subTo(x)}
     });
-  })();
+  });
+  window.addEventListener('online',function(){NET.cs.forEach(function(x){if(x.c&&!x.c.connected){try{x.c.reconnect()}catch(e){}}})});
 }
-function subscribeRoom(){
-  if(!NET.client)return;
-  NET.client.subscribe([prefix()+'chat',prefix()+'alerts/+'],{qos:1});
-}
+function subscribeRoom(){NET.cs.forEach(function(x){if(x.ok)subTo(x)})}
 function changeRoom(r){
   r=(r||'').toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,24)||'valparaiso-demo';
   if(r===S.room)return;
-  if(NET.client&&NET.ok){try{NET.client.unsubscribe([prefix()+'chat',prefix()+'alerts/+'])}catch(e){}}
+  NET.cs.forEach(function(x){if(x.ok){try{x.c.unsubscribe(topics())}catch(e){}}});
   S.room=r;store.set('room',r);S.msgs={};S.alerts={};S.seen={};S.sel=null;
   S.netSince=Date.now()+2500;
-  if(NET.ok)subscribeRoom();
+  subscribeRoom();
   updateConn();renderChat();refresh(true);scheduleRoutes();
 }
 
@@ -1625,7 +1647,7 @@ function renderChat(){
 }
 function postChat(doc){
   doc.id=newId();
-  if(!publish('chat',doc,false))doc.local=true;
+  if(!publish('chat/'+doc.id,doc,true))doc.local=true;
   S.msgs[doc.id]=doc;renderChat();
 }
 function sendMsg(text){
