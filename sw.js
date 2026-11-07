@@ -1,9 +1,11 @@
-/* Service worker de Alerta Vecinal: guarda la app y el mapa para usarlos sin internet.
+/* Service worker de Vigía: guarda la app y el mapa para usarlos sin internet.
    Debe estar en la misma carpeta que index.html (y servirse por https). */
-var SHELL='av-shell-v3',TILES='av-tiles-v1';
+var SHELL='av-shell-v4',TILES='av-tiles-v1';
 self.addEventListener('install',function(e){
   self.skipWaiting();
-  e.waitUntil(caches.open(SHELL).then(function(c){return c.addAll(['./','index.html']).catch(function(){})}));
+  e.waitUntil(caches.open(SHELL).then(function(c){
+    return Promise.all(['./','index.html','manifest.webmanifest','icon-192.png','icon-512.png','apple-touch-icon.png'].map(function(u){return c.add(u).catch(function(){})}));
+  }));
 });
 self.addEventListener('activate',function(e){
   e.waitUntil(caches.keys().then(function(ks){
@@ -40,7 +42,8 @@ self.addEventListener('fetch',function(e){
   var req=e.request;if(req.method!=='GET')return;
   var u=new URL(req.url);
   if(isTile(u)){e.respondWith(tile(req));return}
-  if(u.origin===self.location.origin&&(req.mode==='navigate'||/\/$|\.html$/.test(u.pathname))){e.respondWith(page(req))}
+  if(u.origin===self.location.origin&&(req.mode==='navigate'||/\/$|\.html$/.test(u.pathname))){e.respondWith(page(req));return}
+  if(u.origin===self.location.origin&&/\.(png|webmanifest)$/.test(u.pathname)){e.respondWith(caches.match(req).then(function(h){return h||fetch(req)}))}
 });
 self.addEventListener('message',function(e){
   var d=e.data||{};
