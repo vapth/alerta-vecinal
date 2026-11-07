@@ -717,7 +717,7 @@ button{cursor:pointer}
 .logo{width:38px;height:38px;border-radius:11px;background:var(--red);display:grid;place-items:center;color:#fff;flex:none}
 .logo .ic{width:22px;height:22px}
 .brand{min-width:0;flex:1;overflow:hidden}
-.brand b{display:block;font:500 19px/1 var(--f-display);letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand b{display:block;font:600 19px/1.25 var(--f-display);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;padding-top:2px}
 .brand span{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 .conn #connTxt{display:none}
 .conn{padding:10px!important;max-width:none!important;display:flex;align-items:center;gap:6px;font:400 11px var(--f-mono);color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:5px 9px;background:var(--surface);white-space:nowrap;max-width:30vw;overflow:hidden;text-overflow:ellipsis}
@@ -1202,7 +1202,7 @@ var S={
   tab:'map',uid:store.get('uid',null)||('u'+Math.random().toString(36).slice(2,10)),
   name:store.get('name',''),sector:store.get('sector',''),room:room0,
   me:store.get('me',DEFAULT_ME),gps:false,mePlace:'',baseUser:store.get('base',null),themePref:store.get('theme','auto'),theme:'dark',
-  wx:store.get('wx2',{t:20,h:50,w:15,d:225}),wxReal:false,rcOpen:store.get('rcOpen',false),zonesOn:store.get('zones',true),accOn:store.get('acc',false),sirenOn:store.get('siren',true),chk:store.get('chk',{}),
+  wx:store.get('wx2',{t:20,h:50,w:15,d:225}),wxReal:false,rcOpen:store.get('rcOpen',false),zonesOn:store.get('zones',true),accOn:store.get('acc',false),sirenOn:store.get('siren',true),notifOn:store.get('notif',true),chk:store.get('chk',{}),
   msgs:{},alerts:{},seen:{},zones:[],routes:[],ri:0,dest:null,insideFire:false,
   cache:{},det:{},busy:false,loading:false,anyBlocked:false,
   sel:null,sos:null,legend:false,routeSig:'',netSince:0,acache:{},accRoutes:[],ai:0,accLoading:false,menu:false
@@ -1625,6 +1625,32 @@ window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();DEF
 window.addEventListener('appinstalled',function(){DEFER=null;toast('App instalada');if(S.menu)openMapMenu()});
 function isStandalone(){return !!((window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||navigator.standalone===true)}
 function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
+/* ---------- Notificaciones ---------- */
+function notifSupported(){return typeof Notification!=='undefined'}
+function notifOn(){return notifSupported()&&Notification.permission==='granted'&&S.notifOn}
+function requestNotif(cb){
+  if(!notifSupported()){toast(isIOS()&&!isStandalone()?'En iPhone, primero instala la app (Compartir → Agregar a pantalla de inicio).':'Este navegador no admite notificaciones.');if(cb)cb(false);return}
+  var done=function(p){store.set('notifAsked',true);S.notifOn=(p==='granted');store.set('notif',S.notifOn);if(p==='denied')toast('Notificaciones bloqueadas. Actívalas en los ajustes del navegador.');if(cb)cb(p==='granted')};
+  try{var r=Notification.requestPermission(done);if(r&&r.then)r.then(done)}catch(e){done('denied')}
+}
+function notifyAlert(a){
+  if(!notifOn()||!document.hidden)return;
+  var o={body:(a.name||'Un vecino')+' activó una alerta · '+placeOf(a),tag:'alert-'+a.id,icon:'icon-192.png',badge:'icon-192.png',vibrate:[300,120,300,120,500],renotify:true,requireInteraction:true,data:{alertId:a.id}};
+  var t='🔥 Alerta de incendio';
+  try{
+    if(navigator.serviceWorker&&navigator.serviceWorker.getRegistration){
+      navigator.serviceWorker.getRegistration().then(function(r){if(r&&r.showNotification)r.showNotification(t,o);else new Notification(t,o)}).catch(function(){try{new Notification(t,o)}catch(e){}});
+    }else new Notification(t,o);
+  }catch(e){}
+}
+function askNotifSheet(){
+  if(!notifSupported()||Notification.permission!=='default'||store.get('notifAsked',false)||!$('#overlay').hidden)return;
+  var sh=$('#sheet');
+  sh.innerHTML='<h2><svg class="ic"><use href="#i-bell"/></svg>¿Recibir avisos de alerta?</h2>'
+   +'<p style="margin:0 0 14px;color:var(--muted)">Te avisaremos con una notificación cuando un vecino active la alerta de incendio, aunque tengas la app en segundo plano.</p>'
+   +'<div style="display:flex;gap:10px"><button class="btn" data-act="notifno" style="flex:1;min-height:46px">Ahora no</button><button class="btn pri" data-act="notifyes" style="flex:1;min-height:46px">Activar avisos</button></div>';
+  openOverlay();
+}
 function installRow(){
   var ic='<svg class="ic"><use href="#i-down"/></svg>';
   if(isStandalone())return '<div class="mrow">'+ic+'<div class="tx"><b>App instalada</b><small>Estás usando Vigía como app.</small></div></div>';
@@ -1651,6 +1677,7 @@ function openMapMenu(){
    +swRow('gps','Usar el GPS','Si lo apagas, tu ubicación es la del sector elegido.','gps',S.gps)
    +swRow('vol','Sirena de alerta','Suena al enviar o recibir una alerta.','siren',S.sirenOn)
    +'<div class="mrow"><svg class="ic"><use href="#i-bell"/></svg><div class="tx"><b>Probar la sirena</b><small>Sube el volumen y quita el modo silencio.</small></div><button type="button" class="btn sm" data-act="siren:test">Probar</button></div>'
+   +swRow('bell','Notificaciones','Aviso cuando un vecino activa una alerta.','notif',notifOn())
    +installRow()
    +'<div class="mrow" style="align-items:flex-start"><svg class="ic" style="margin-top:2px"><use href="#i-down"/></svg><div class="tx"><b>Usar sin internet</b><small id="offTxt"></small><div class="pbar" style="margin:8px 0 10px"><i id="offBar"></i></div><button type="button" class="btn sm" data-act="offline">Guardar rutas y mapa ahora</button></div></div>'
    +'</div>'
@@ -1910,7 +1937,7 @@ function onNetMessage(topic,payload){
       renderChat();
     }
     refresh(true);scheduleRoutes();
-    if(isNew&&Date.now()>S.netSince&&d2.uid!==S.uid&&d2.status!=='controlled'&&Date.now()-d2.t<90000){showBanner(d2);playSiren(5)}
+    if(isNew&&Date.now()>S.netSince&&d2.uid!==S.uid&&d2.status!=='controlled'&&Date.now()-d2.t<90000){showBanner(d2);playSiren(5);notifyAlert(d2)}
   }
 }
 function cleanMsg(m){
@@ -2272,6 +2299,9 @@ function act(str){
     case 'sos':if(!$('#overlay').hidden)break;S.sos={step:'confirm',dist:900};renderSOS();openOverlay();updateMePlace();break;
     case 'sosdist':if(S.sos){S.sos.dist=+v;renderSOS()}break;
     case 'sosclose':closeOverlay();break;
+    case 'notifyes':closeOverlay();requestNotif(function(ok){if(ok)toast('Avisos activados');if(S.menu)openMapMenu()});break;
+    case 'notifno':store.set('notifAsked',true);closeOverlay();break;
+    case 'notif':if(notifSupported()&&Notification.permission==='granted'){S.notifOn=!S.notifOn;store.set('notif',S.notifOn);if(S.menu)openMapMenu()}else requestNotif(function(){if(S.menu)openMapMenu()});break;
     case 'sosmap':{var id=S.sos&&S.sos.alertId;closeOverlay();setTab('map');var a=S.alerts[id];if(a){S.sel={t:'fire',id:id};renderSel();setTimeout(function(){map.invalidateSize();fitTo([S.me,a],15)},80)}break}
     case 'soschat':closeOverlay();setTab('chat');break;
     case 'viewalert':{var al=S.alerts[v];setTab('map');if(al){S.sel={t:'fire',id:v};renderSel();setTimeout(function(){map.invalidateSize();fitTo([S.me,al],15)},80)}else toast('Esa alerta ya no está disponible.');break}
@@ -2307,7 +2337,7 @@ function act(str){
       S.sector=sv==='__other'?($('#pSectorOther').value||'').trim().slice(0,30):sv;
       store.set('name',S.name);store.set('sector',S.sector);
       var room=$('#pRoom').value,sc=sectorByName(S.sector);
-      $('#avatar').textContent=(S.name||'V').charAt(0);closeOverlay();changeRoom(room);
+      $('#avatar').textContent=(S.name||'V').charAt(0);closeOverlay();changeRoom(room);setTimeout(askNotifSheet,1500);
       if(sc&&S.sector!==prevSec&&!S.gps){setMe(sc.lat,sc.lon,true);if(map)map.setView([sc.lat,sc.lon],14);toast('Ubicación simulada en '+S.sector+' (aproximada)')}
       else toast('Perfil guardado');
       break;
@@ -2360,6 +2390,7 @@ function init(){
     scheduleRoutes();setTimeout(function(){precacheRoutes(false)},3000);
   });
   if(!S.name)setTimeout(function(){if($('#overlay').hidden)openProfile(true)},700);
+  else setTimeout(askNotifSheet,2500);
 }
 window.__av=S;
 init();

@@ -1,6 +1,6 @@
 /* Service worker de Vigía: guarda la app y el mapa para usarlos sin internet.
    Debe estar en la misma carpeta que index.html (y servirse por https). */
-var SHELL='av-shell-v4',TILES='av-tiles-v1';
+var SHELL='av-shell-v5',TILES='av-tiles-v1';
 self.addEventListener('install',function(e){
   self.skipWaiting();
   e.waitUntil(caches.open(SHELL).then(function(c){
@@ -61,4 +61,12 @@ self.addEventListener('message',function(e){
     }
   }
   e.waitUntil(Promise.all([worker(),worker(),worker(),worker()]));
+});
+
+self.addEventListener('notificationclick',function(e){
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(l){
+    for(var i=0;i<l.length;i++){if('focus' in l[i])return l[i].focus()}
+    if(self.clients.openWindow)return self.clients.openWindow('./');
+  }));
 });
